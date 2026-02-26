@@ -17,7 +17,7 @@ end, { desc = "Open the PR review list" })
 
 vim.api.nvim_create_user_command("GhReviewRefresh", function()
   ensure_config()
-  require("gh-review.ui").refresh()
+  require("gh-review.ui").refresh(true)
 end, { desc = "Refresh the PR review list" })
 
 vim.api.nvim_create_user_command("GhReviewClose", function()

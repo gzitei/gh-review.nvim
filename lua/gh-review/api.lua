@@ -1,6 +1,7 @@
 local config = require("gh-review.config")
 local curl = require("plenary.curl")
 local filters = require("gh-review.filters")
+local cache = require("gh-review.cache")
 
 local M = {}
 
@@ -171,11 +172,11 @@ local function calculate_pipeline_status(check_runs)
   }
 end
 
---- Fetch all PRs that the current user needs to review.
+--- Fetch all PRs that the current user needs to review directly from GitHub.
 --- This is a blocking call -- use vim.schedule or wrap in async for UI.
 ---@return table[] prs Array of enriched PR objects
 ---@return string|nil error
-function M.fetch_review_requests()
+local function fetch_review_requests_live()
   -- Get current user
   local user, user_err = M.get_user()
   if user_err then
@@ -291,6 +292,42 @@ function M.fetch_review_requests()
         end
       end
     end
+  end
+
+  return prs, nil
+end
+
+--- Fetch review requests using cache with configurable invalidation.
+---@param opts? { force?: boolean }
+---@return table[] prs Array of enriched PR objects
+---@return string|nil error
+function M.fetch_review_requests(opts)
+  opts = opts or {}
+
+  local key = "review_requests"
+  local ttl_minutes = tonumber(config.options.cache_ttl_minutes) or 0
+  local ttl_seconds = ttl_minutes > 0 and (ttl_minutes * 60) or nil
+  local stale_cached = cache.get(key)
+
+  if (not opts.force) and ttl_seconds then
+    local cached = cache.get(key, ttl_seconds)
+    if cached then
+      return cached, nil
+    end
+  end
+
+  local prs, err = fetch_review_requests_live()
+  if err then
+    if stale_cached then
+      return stale_cached, nil
+    end
+    return {}, err
+  end
+
+  if ttl_seconds then
+    cache.set(key, prs)
+  else
+    cache.invalidate(key)
   end
 
   return prs, nil

@@ -17,6 +17,29 @@ local state = {
   detail_buf = nil,
 }
 
+local function card_border_chars()
+  local border = config.options.view and config.options.view.border or "rounded"
+  if border == "rounded" then
+    return {
+      top_left = "╭",
+      top_right = "╮",
+      bottom_left = "╰",
+      bottom_right = "╯",
+      horizontal = "─",
+      vertical = "│",
+    }
+  end
+
+  return {
+    top_left = "+",
+    top_right = "+",
+    bottom_left = "+",
+    bottom_right = "+",
+    horizontal = "-",
+    vertical = "|",
+  }
+end
+
 --- Close any open detail popup.
 local function close_detail()
   if state.detail_win and vim.api.nvim_win_is_valid(state.detail_win) then
@@ -57,46 +80,56 @@ end
 local function build_card_lines(pr, card_width)
   local lines = {}
   local inner_width = card_width - 4
+  local safe = utils.ascii_safe
+  local border = card_border_chars()
+
+  local line_prefix = border.vertical .. " "
+  local line_suffix = " " .. border.vertical
 
   -- Top border
   table.insert(lines, {
-    text = "╭" .. string.rep("─", inner_width + 2) .. "╮",
-    highlights = { { "GhReviewSeparator", 0, card_width } },
+    text = border.top_left .. string.rep(border.horizontal, inner_width + 2) .. border.top_right,
+    highlights = { { "GhReviewSeparator", 0, -1 } },
   })
 
   -- Line 1: Title + PR number
   local number_str = string.format("#%d", pr.number)
-  local title_max = inner_width - #number_str - 3 -- space for gap
-  local title = utils.truncate(pr.title, title_max)
+  local title_max = inner_width - #number_str - 2
+  local title = utils.truncate(safe(pr.title), title_max)
   local title_padded = utils.pad_right(title, title_max)
-  local line1 = "│ " .. title_padded .. "  " .. number_str .. " │"
+  local line1 = line_prefix .. title_padded .. "  " .. number_str .. line_suffix
   line1 = utils.pad_right(line1, card_width)
+
+  local title_start = #line_prefix
+  local number_start = #line_prefix + #title_padded + 2
 
   local title_hl = pr.draft and "GhReviewCardTitleDraft" or "GhReviewCardTitle"
   table.insert(lines, {
     text = line1,
     highlights = {
-      { title_hl, 2, 2 + #title },
-      { "GhReviewCardNumber", 2 + title_max + 2, 2 + title_max + 2 + #number_str },
+      { "GhReviewSeparator", 0, -1 },
+      { title_hl, title_start, title_start + #title },
+      { "GhReviewCardNumber", number_start, number_start + #number_str },
     },
   })
 
   -- Line 2: repo | author | updated
-  local repo_str = pr.repo_name or ""
-  local author_str = pr.author or ""
+  local repo_str = safe(pr.repo_name or pr.repo_full_name or "")
+  local author_str = safe(pr.author or "")
   local time_str = utils.relative_time(pr.updated_at)
-  local repo_display = "repo:" .. utils.truncate(repo_str, 18)
-  local author_display = "author:" .. utils.truncate(author_str, 13)
+  local repo_display = "repo:" .. utils.truncate(repo_str, 20)
+  local author_display = "author:" .. utils.truncate(author_str, 14)
   local time_display = "updated:" .. time_str
 
   local meta_line = repo_display .. "  " .. author_display .. "  " .. time_display
-  meta_line = "│ " .. utils.pad_right(meta_line, inner_width) .. " │"
+  meta_line = line_prefix .. utils.pad_right(meta_line, inner_width) .. line_suffix
   meta_line = utils.pad_right(meta_line, card_width)
 
-  local col = 2
+  local col = #line_prefix
   table.insert(lines, {
     text = meta_line,
     highlights = {
+      { "GhReviewSeparator", 0, -1 },
       { "GhReviewCardRepo", col, col + #repo_display },
       { "GhReviewCardAuthor", col + #repo_display + 2, col + #repo_display + 2 + #author_display },
       { "GhReviewCardTime", col + #repo_display + 2 + #author_display + 2, col + #repo_display + 2 + #author_display + 2 + #time_display },
@@ -112,14 +145,15 @@ local function build_card_lines(pr, card_width)
   if draft_str ~= "" then
     badges_line = badges_line .. "  " .. draft_str
   end
-  badges_line = "│ " .. utils.pad_right(badges_line, inner_width) .. " │"
+  badges_line = line_prefix .. utils.pad_right(badges_line, inner_width) .. line_suffix
   badges_line = utils.pad_right(badges_line, card_width)
 
-  local badge_col = 2
+  local badge_col = #line_prefix
   local approval_hl = colors.approval_hl(pr.approval_status and pr.approval_status.status or "pending")
   local ci_hl = colors.ci_hl(pr.pipeline_status and pr.pipeline_status.status or "none")
 
   local badge_highlights = {
+    { "GhReviewSeparator", 0, -1 },
     { approval_hl, badge_col, badge_col + #approval_str },
     { ci_hl, badge_col + #approval_str + 2, badge_col + #approval_str + 2 + #ci_str },
   }
@@ -142,25 +176,31 @@ local function build_card_lines(pr, card_width)
   local commits_str = string.format("commits:%d", pr.commits or 0)
   local comments_str = string.format("comments:%d", pr.comments or 0)
 
-  local stats_line = string.format("%s  %s  %s  %s", additions_str, deletions_str, commits_str, comments_str)
-  stats_line = "│ " .. utils.pad_right(stats_line, inner_width) .. " │"
+  local stats_line = string.format("changes:%s %s  %s  %s", additions_str, deletions_str, commits_str, comments_str)
+  stats_line = line_prefix .. utils.pad_right(stats_line, inner_width) .. line_suffix
   stats_line = utils.pad_right(stats_line, card_width)
 
-  local stats_col = 2
+  local stats_col = #line_prefix
+  local changes_prefix = "changes:"
+  local additions_start = stats_col + #changes_prefix
+  local deletions_start = additions_start + #additions_str + 1
+  local commits_start = deletions_start + #deletions_str + 2
+  local comments_start = commits_start + #commits_str + 2
   table.insert(lines, {
     text = stats_line,
     highlights = {
-      { "GhReviewAdditions", stats_col, stats_col + #additions_str },
-      { "GhReviewDeletions", stats_col + #additions_str + 2, stats_col + #additions_str + 2 + #deletions_str },
-      { "GhReviewCardStats", stats_col + #additions_str + 2 + #deletions_str + 2, stats_col + #additions_str + 2 + #deletions_str + 2 + #commits_str },
-      { "GhReviewCardStats", stats_col + #additions_str + 2 + #deletions_str + 2 + #commits_str + 2, stats_col + #additions_str + 2 + #deletions_str + 2 + #commits_str + 2 + #comments_str },
+      { "GhReviewSeparator", 0, -1 },
+      { "GhReviewAdditions", additions_start, additions_start + #additions_str },
+      { "GhReviewDeletions", deletions_start, deletions_start + #deletions_str },
+      { "GhReviewCardStats", commits_start, commits_start + #commits_str },
+      { "GhReviewCardStats", comments_start, comments_start + #comments_str },
     },
   })
 
   -- Bottom border
   table.insert(lines, {
-    text = "╰" .. string.rep("─", inner_width + 2) .. "╯",
-    highlights = { { "GhReviewSeparator", 0, card_width } },
+    text = border.bottom_left .. string.rep(border.horizontal, inner_width + 2) .. border.bottom_right,
+    highlights = { { "GhReviewSeparator", 0, -1 } },
   })
 
   return lines
@@ -183,16 +223,16 @@ local function render()
   state.card_lines = {}
 
   -- Title line
-  local title = " GH Review Queue "
+  local title = "GH Review Queue"
   local count_str = string.format("[%d]", #state.prs)
-  local title_line = utils.center(title .. count_str, card_width)
+  local title_line = utils.pad_right(string.format(" %s %s", title, count_str), card_width)
   table.insert(all_lines, title_line)
   table.insert(all_highlights, { #all_lines, "GhReviewTitle", 0, #title_line })
 
   -- Keybindings hint
   local keymaps = config.options.keymaps
   local hint = string.format(
-    " %s review  %s refresh  %s browser  %s detail  %s/%s move  %s close ",
+    " keys: %s review | %s refresh | %s browser | %s detail | %s/%s move | %s close",
     keymaps.open_review,
     keymaps.refresh,
     keymaps.open_in_browser,
@@ -201,7 +241,7 @@ local function render()
     keymaps.prev_pr,
     keymaps.close
   )
-  local hint_line = utils.center(hint, card_width)
+  local hint_line = utils.pad_right(hint, card_width)
   table.insert(all_lines, hint_line)
   table.insert(all_highlights, { #all_lines, "GhReviewHeader", 0, #hint_line })
 
@@ -265,14 +305,16 @@ local function open_detail_popup()
     return
   end
 
+  local safe = utils.ascii_safe
+
   -- Build detail content
   local detail_lines = {
-    string.format("# %s", pr.title),
+    string.format("# %s", safe(pr.title)),
     "",
     string.format("**PR:** #%d", pr.number),
-    string.format("**Repository:** %s", pr.repo_full_name),
-    string.format("**Author:** %s", pr.author),
-    string.format("**Branch:** %s -> %s", pr.head_ref or "unknown", pr.base_ref or "unknown"),
+    string.format("**Repository:** %s", safe(pr.repo_full_name)),
+    string.format("**Author:** %s", safe(pr.author)),
+    string.format("**Branch:** %s -> %s", safe(pr.head_ref or "unknown"), safe(pr.base_ref or "unknown")),
     string.format("**Created:** %s", utils.relative_time(pr.created_at)),
     string.format("**Updated:** %s", utils.relative_time(pr.updated_at)),
     "",
@@ -291,13 +333,13 @@ local function open_detail_popup()
     table.insert(detail_lines, "")
     local label_names = {}
     for _, label in ipairs(pr.labels) do
-      table.insert(label_names, label.name)
+      table.insert(label_names, safe(label.name))
     end
     table.insert(detail_lines, "**Labels:** " .. table.concat(label_names, ", "))
   end
 
   table.insert(detail_lines, "")
-  table.insert(detail_lines, string.format("**URL:** %s", pr.html_url))
+  table.insert(detail_lines, string.format("**URL:** %s", safe(pr.html_url)))
 
   -- Reviewers
   if pr.reviews and #pr.reviews > 0 then
@@ -306,7 +348,7 @@ local function open_detail_popup()
     local seen = {}
     for i = #pr.reviews, 1, -1 do
       local review = pr.reviews[i]
-      local login = review.user and review.user.login or "unknown"
+      local login = safe(review.user and review.user.login or "unknown")
       if not seen[login] then
         seen[login] = true
         local state_icon = ({
@@ -315,7 +357,8 @@ local function open_detail_popup()
           COMMENTED = "",
           DISMISSED = "",
         })[review.state] or "?"
-        table.insert(detail_lines, string.format("  %s %s (%s)", state_icon, login, review.state:lower()))
+        local review_state = safe((review.state or "unknown"):lower())
+        table.insert(detail_lines, string.format("  %s %s (%s)", state_icon, login, review_state))
       end
     end
   end
@@ -466,7 +509,9 @@ local function setup_keymaps()
 
   vim.keymap.set("n", keymaps.close, M.close, opts)
   vim.keymap.set("n", keymaps.open_review, open_review, opts)
-  vim.keymap.set("n", keymaps.refresh, M.refresh, opts)
+  vim.keymap.set("n", keymaps.refresh, function()
+    M.refresh(true)
+  end, opts)
   vim.keymap.set("n", keymaps.open_in_browser, open_in_browser, opts)
   vim.keymap.set("n", keymaps.toggle_detail, open_detail_popup, opts)
   vim.keymap.set("n", keymaps.next_pr, move_to_next_pr, opts)
@@ -474,7 +519,8 @@ local function setup_keymaps()
 end
 
 --- Fetch PRs and re-render.
-function M.refresh()
+---@param force? boolean Bypass cache when true
+function M.refresh(force)
   if state.loading then
     return
   end
@@ -485,7 +531,7 @@ function M.refresh()
   -- Run the API call in a scheduled callback
   vim.schedule(function()
     local api = require("gh-review.api")
-    local ok, prs_or_err, api_err = pcall(api.fetch_review_requests)
+    local ok, prs_or_err, api_err = pcall(api.fetch_review_requests, { force = force == true })
 
     vim.schedule(function()
       state.loading = false

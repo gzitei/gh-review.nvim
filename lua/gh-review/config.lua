@@ -20,6 +20,7 @@
 ---@field max_results? number How many PRs to fetch at most
 ---@field auto_fetch? boolean Auto-fetch remote before switching branches
 ---@field auto_stash? boolean Auto-stash changes before switching branches
+---@field cache_ttl_minutes? number Cache validity in minutes (0 disables caching)
 ---@field view? GhReviewConfigView View configuration
 ---@field keymaps? GhReviewConfigKeymaps Keymaps inside the PR list window
 
@@ -47,6 +48,7 @@ M.defaults = {
   max_results = 50,
   auto_fetch = true,
   auto_stash = true,
+  cache_ttl_minutes = 5,
   view = {
     width = 0.7,
     height = 0.8,

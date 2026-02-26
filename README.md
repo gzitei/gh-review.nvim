@@ -79,6 +79,9 @@ require("gh-review").setup({
   -- Auto-stash uncommitted changes before switching branches
   auto_stash = true,
 
+  -- Cache PR list for this many minutes (0 disables cache)
+  cache_ttl_minutes = 5,
+
   -- Floating window appearance
   view = {
     width = 0.7,    -- fraction of editor width
@@ -104,7 +107,7 @@ require("gh-review").setup({
 | Command | Description |
 |---|---|
 | `:GhReviewOpen` | Open/toggle the PR review list |
-| `:GhReviewRefresh` | Refresh the PR list |
+| `:GhReviewRefresh` | Refresh the PR list (bypasses cache) |
 | `:GhReviewClose` | Close the PR review list |
 
 ## Usage
@@ -119,17 +122,19 @@ require("gh-review").setup({
 5. Press `o` to open the PR in your browser
 6. Press `q` to close the list
 
+`r` and `:GhReviewRefresh` always bypass cache and fetch fresh data.
+
 ## PR Card Layout
 
 Each PR is displayed as a card showing:
 
 ```
-──────────────────────────────────────────
-  Fix authentication timeout issue  #142
-   my-repo   johndoe   2h ago
-   Approved (2)   CI Passing (8/8)
-  +45  -12   3   5
-──────────────────────────────────────────
+╭────────────────────────────────────────╮
+│ Fix authentication timeout issue  #142 │
+│ repo:my-repo  author:johndoe  updated:2h ago │
+│ Review: Approved (2)  CI: Passing (8/8) │
+│ changes:+45 -12  commits:3  comments:5 │
+╰────────────────────────────────────────╯
 ```
 
 - **Title** and PR number
