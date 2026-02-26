@@ -4,52 +4,40 @@ local M = {}
 function M.setup()
   local set_hl = vim.api.nvim_set_hl
 
-  -- Window chrome
-  set_hl(0, "GhReviewTitle", { fg = "#c9d1d9", bg = "#161b22", bold = true })
-  set_hl(0, "GhReviewBorder", { fg = "#30363d", bg = "#0d1117" })
-  set_hl(0, "GhReviewNormal", { fg = "#c9d1d9", bg = "#0d1117" })
-  set_hl(0, "GhReviewHeader", { fg = "#8b949e", bg = "#0d1117", bold = true })
-  set_hl(0, "GhReviewSeparator", { fg = "#21262d", bg = "#0d1117" })
+  -- Theme-aware defaults for better integration with active colorscheme.
+  set_hl(0, "GhReviewTitle", { link = "Title", default = true })
+  set_hl(0, "GhReviewBorder", { link = "FloatBorder", default = true })
+  set_hl(0, "GhReviewNormal", { link = "NormalFloat", default = true })
+  set_hl(0, "GhReviewHeader", { link = "Comment", default = true })
+  set_hl(0, "GhReviewSeparator", { link = "WinSeparator", default = true })
 
-  -- Card components
-  set_hl(0, "GhReviewCardTitle", { fg = "#58a6ff", bold = true })
-  set_hl(0, "GhReviewCardTitleDraft", { fg = "#d29922", bold = true, italic = true })
-  set_hl(0, "GhReviewCardNumber", { fg = "#8b949e" })
-  set_hl(0, "GhReviewCardRepo", { fg = "#bc8cff" })
-  set_hl(0, "GhReviewCardAuthor", { fg = "#c9d1d9" })
-  set_hl(0, "GhReviewCardTime", { fg = "#484f58" })
-  set_hl(0, "GhReviewCardStats", { fg = "#8b949e" })
+  set_hl(0, "GhReviewCardTitle", { link = "Function", default = true })
+  set_hl(0, "GhReviewCardTitleDraft", { link = "WarningMsg", default = true })
+  set_hl(0, "GhReviewCardNumber", { link = "Comment", default = true })
+  set_hl(0, "GhReviewCardRepo", { link = "Identifier", default = true })
+  set_hl(0, "GhReviewCardAuthor", { link = "Normal", default = true })
+  set_hl(0, "GhReviewCardTime", { link = "Comment", default = true })
+  set_hl(0, "GhReviewCardStats", { link = "NonText", default = true })
 
-  -- Approval status badges
-  set_hl(0, "GhReviewApproved", { fg = "#3fb950", bold = true })
-  set_hl(0, "GhReviewChangesRequested", { fg = "#f85149", bold = true })
-  set_hl(0, "GhReviewCommented", { fg = "#58a6ff" })
-  set_hl(0, "GhReviewPending", { fg = "#d29922" })
+  set_hl(0, "GhReviewApproved", { link = "DiffAdd", default = true })
+  set_hl(0, "GhReviewChangesRequested", { link = "DiffDelete", default = true })
+  set_hl(0, "GhReviewCommented", { link = "Special", default = true })
+  set_hl(0, "GhReviewPending", { link = "WarningMsg", default = true })
 
-  -- CI status badges
-  set_hl(0, "GhReviewCISuccess", { fg = "#3fb950" })
-  set_hl(0, "GhReviewCIFailure", { fg = "#f85149" })
-  set_hl(0, "GhReviewCIPending", { fg = "#d29922" })
-  set_hl(0, "GhReviewCINone", { fg = "#484f58" })
+  set_hl(0, "GhReviewCISuccess", { link = "DiffAdd", default = true })
+  set_hl(0, "GhReviewCIFailure", { link = "DiffDelete", default = true })
+  set_hl(0, "GhReviewCIPending", { link = "WarningMsg", default = true })
+  set_hl(0, "GhReviewCINone", { link = "Comment", default = true })
 
-  -- Stats
-  set_hl(0, "GhReviewAdditions", { fg = "#3fb950" })
-  set_hl(0, "GhReviewDeletions", { fg = "#f85149" })
-
-  -- Selected card
-  set_hl(0, "GhReviewSelected", { bg = "#161b22" })
-  set_hl(0, "GhReviewCursorLine", { bg = "#1c2128" })
-
-  -- Draft indicator
-  set_hl(0, "GhReviewDraft", { fg = "#d29922", italic = true })
-
-  -- Labels
-  set_hl(0, "GhReviewLabel", { fg = "#c9d1d9", bg = "#21262d" })
-
-  -- Loading / empty states
-  set_hl(0, "GhReviewLoading", { fg = "#d29922", italic = true })
-  set_hl(0, "GhReviewEmpty", { fg = "#484f58", italic = true })
-  set_hl(0, "GhReviewError", { fg = "#f85149", bold = true })
+  set_hl(0, "GhReviewAdditions", { link = "DiffAdd", default = true })
+  set_hl(0, "GhReviewDeletions", { link = "DiffDelete", default = true })
+  set_hl(0, "GhReviewSelected", { link = "Visual", default = true })
+  set_hl(0, "GhReviewCursorLine", { link = "CursorLine", default = true })
+  set_hl(0, "GhReviewDraft", { link = "WarningMsg", default = true })
+  set_hl(0, "GhReviewLabel", { link = "PmenuSel", default = true })
+  set_hl(0, "GhReviewLoading", { link = "WarningMsg", default = true })
+  set_hl(0, "GhReviewEmpty", { link = "Comment", default = true })
+  set_hl(0, "GhReviewError", { link = "ErrorMsg", default = true })
 end
 
 --- Get the highlight group for an approval status.

@@ -56,11 +56,11 @@ end
 ---@return table[] lines
 local function build_card_lines(pr, card_width)
   local lines = {}
-  local inner_width = card_width - 4 -- account for "  " padding on each side
+  local inner_width = card_width - 4
 
   -- Top border
   table.insert(lines, {
-    text = "  " .. string.rep("─", inner_width) .. "  ",
+    text = "╭" .. string.rep("─", inner_width + 2) .. "╮",
     highlights = { { "GhReviewSeparator", 0, card_width } },
   })
 
@@ -69,7 +69,7 @@ local function build_card_lines(pr, card_width)
   local title_max = inner_width - #number_str - 3 -- space for gap
   local title = utils.truncate(pr.title, title_max)
   local title_padded = utils.pad_right(title, title_max)
-  local line1 = "  " .. title_padded .. "  " .. number_str .. "  "
+  local line1 = "│ " .. title_padded .. "  " .. number_str .. " │"
   line1 = utils.pad_right(line1, card_width)
 
   local title_hl = pr.draft and "GhReviewCardTitleDraft" or "GhReviewCardTitle"
@@ -85,12 +85,12 @@ local function build_card_lines(pr, card_width)
   local repo_str = pr.repo_name or ""
   local author_str = pr.author or ""
   local time_str = utils.relative_time(pr.updated_at)
-  local repo_display = " " .. utils.truncate(repo_str, 20)
-  local author_display = " " .. utils.truncate(author_str, 15)
-  local time_display = " " .. time_str
+  local repo_display = "repo:" .. utils.truncate(repo_str, 18)
+  local author_display = "author:" .. utils.truncate(author_str, 13)
+  local time_display = "updated:" .. time_str
 
   local meta_line = repo_display .. "  " .. author_display .. "  " .. time_display
-  meta_line = "  " .. utils.pad_right(meta_line, inner_width) .. "  "
+  meta_line = "│ " .. utils.pad_right(meta_line, inner_width) .. " │"
   meta_line = utils.pad_right(meta_line, card_width)
 
   local col = 2
@@ -112,7 +112,7 @@ local function build_card_lines(pr, card_width)
   if draft_str ~= "" then
     badges_line = badges_line .. "  " .. draft_str
   end
-  badges_line = "  " .. utils.pad_right(badges_line, inner_width) .. "  "
+  badges_line = "│ " .. utils.pad_right(badges_line, inner_width) .. " │"
   badges_line = utils.pad_right(badges_line, card_width)
 
   local badge_col = 2
@@ -139,14 +139,14 @@ local function build_card_lines(pr, card_width)
   -- Line 4: Stats (additions, deletions, commits, comments)
   local additions_str = string.format("+%d", pr.additions or 0)
   local deletions_str = string.format("-%d", pr.deletions or 0)
-  local commits_str = string.format(" %d", pr.commits or 0)
-  local comments_str = string.format(" %d", pr.comments or 0)
+  local commits_str = string.format("commits:%d", pr.commits or 0)
+  local comments_str = string.format("comments:%d", pr.comments or 0)
 
-  local stats_line = string.format("  %s  %s  %s  %s", additions_str, deletions_str, commits_str, comments_str)
-  stats_line = "  " .. utils.pad_right(stats_line, inner_width) .. "  "
+  local stats_line = string.format("%s  %s  %s  %s", additions_str, deletions_str, commits_str, comments_str)
+  stats_line = "│ " .. utils.pad_right(stats_line, inner_width) .. " │"
   stats_line = utils.pad_right(stats_line, card_width)
 
-  local stats_col = 4 -- "  " + "  " at start
+  local stats_col = 2
   table.insert(lines, {
     text = stats_line,
     highlights = {
@@ -159,7 +159,7 @@ local function build_card_lines(pr, card_width)
 
   -- Bottom border
   table.insert(lines, {
-    text = "  " .. string.rep("─", inner_width) .. "  ",
+    text = "╰" .. string.rep("─", inner_width + 2) .. "╯",
     highlights = { { "GhReviewSeparator", 0, card_width } },
   })
 
@@ -176,21 +176,31 @@ local function render()
   vim.api.nvim_buf_clear_namespace(state.buf, state.ns, 0, -1)
 
   local win_width = vim.api.nvim_win_get_width(state.win)
-  local card_width = math.min(win_width, win_width)
+  local card_width = math.max(30, win_width - 2)
 
   local all_lines = {}
   local all_highlights = {} -- { line_idx, group, col_start, col_end }
   state.card_lines = {}
 
   -- Title line
-  local title = " Pull Requests for Review "
-  local count_str = string.format("(%d)", #state.prs)
+  local title = " GH Review Queue "
+  local count_str = string.format("[%d]", #state.prs)
   local title_line = utils.center(title .. count_str, card_width)
   table.insert(all_lines, title_line)
   table.insert(all_highlights, { #all_lines, "GhReviewTitle", 0, #title_line })
 
   -- Keybindings hint
-  local hint = " <CR> review  r refresh  o browser  K detail  q close "
+  local keymaps = config.options.keymaps
+  local hint = string.format(
+    " %s review  %s refresh  %s browser  %s detail  %s/%s move  %s close ",
+    keymaps.open_review,
+    keymaps.refresh,
+    keymaps.open_in_browser,
+    keymaps.toggle_detail,
+    keymaps.next_pr,
+    keymaps.prev_pr,
+    keymaps.close
+  )
   local hint_line = utils.center(hint, card_width)
   table.insert(all_lines, hint_line)
   table.insert(all_highlights, { #all_lines, "GhReviewHeader", 0, #hint_line })
@@ -199,11 +209,11 @@ local function render()
   table.insert(all_lines, "")
 
   if state.loading then
-    local loading_line = utils.center("Fetching pull requests...", card_width)
+    local loading_line = utils.center("Fetching review requests from GitHub...", card_width)
     table.insert(all_lines, loading_line)
     table.insert(all_highlights, { #all_lines, "GhReviewLoading", 0, #loading_line })
   elseif #state.prs == 0 then
-    local empty_line = utils.center("No pull requests need your review", card_width)
+    local empty_line = utils.center("No pull requests match your filters", card_width)
     table.insert(all_lines, empty_line)
     table.insert(all_highlights, { #all_lines, "GhReviewEmpty", 0, #empty_line })
   else
@@ -420,6 +430,35 @@ local function open_in_browser()
   end
 end
 
+--- Move cursor to the next PR card.
+local function move_to_next_pr()
+  if not state.win or not vim.api.nvim_win_is_valid(state.win) then
+    return
+  end
+  local current = vim.api.nvim_win_get_cursor(state.win)[1]
+  local last = vim.api.nvim_buf_line_count(state.buf)
+  for line = current + 1, last do
+    if state.card_lines[line] then
+      vim.api.nvim_win_set_cursor(state.win, { line, 0 })
+      return
+    end
+  end
+end
+
+--- Move cursor to the previous PR card.
+local function move_to_prev_pr()
+  if not state.win or not vim.api.nvim_win_is_valid(state.win) then
+    return
+  end
+  local current = vim.api.nvim_win_get_cursor(state.win)[1]
+  for line = current - 1, 1, -1 do
+    if state.card_lines[line] then
+      vim.api.nvim_win_set_cursor(state.win, { line, 0 })
+      return
+    end
+  end
+end
+
 --- Set up keymaps for the PR list buffer.
 local function setup_keymaps()
   local keymaps = config.options.keymaps
@@ -430,6 +469,8 @@ local function setup_keymaps()
   vim.keymap.set("n", keymaps.refresh, M.refresh, opts)
   vim.keymap.set("n", keymaps.open_in_browser, open_in_browser, opts)
   vim.keymap.set("n", keymaps.toggle_detail, open_detail_popup, opts)
+  vim.keymap.set("n", keymaps.next_pr, move_to_next_pr, opts)
+  vim.keymap.set("n", keymaps.prev_pr, move_to_prev_pr, opts)
 end
 
 --- Fetch PRs and re-render.

@@ -17,6 +17,7 @@ A Neovim plugin that displays GitHub pull requests awaiting your review as visua
 ```lua
 {
   "gzitei/gh-review.nvim",
+  cmd = { "GhReviewOpen", "GhReviewRefresh", "GhReviewClose" },
   dependencies = {
     "nvim-lua/plenary.nvim",
     "sindrets/diffview.nvim",
@@ -30,6 +31,9 @@ A Neovim plugin that displays GitHub pull requests awaiting your review as visua
 }
 ```
 
+`GhReviewOpen`, `GhReviewRefresh`, and `GhReviewClose` are defined automatically when the plugin loads.
+Calling `setup()` is still recommended so you can configure token, filters, and keymaps.
+
 ## Configuration
 
 ```lua
@@ -39,10 +43,32 @@ require("gh-review").setup({
   github_token = "",
 
   -- Filter to specific repos (empty = all repos where review is requested)
+  -- Backward-compatible alias for filters.repositories
   repos = {},
 
   -- Monitor review requests for specific teams (e.g., { "my-org/backend-team" })
+  -- These teams are used in GitHub search queries (team-review-requested)
   teams = {},
+
+  -- Optional PR list filters
+  filters = {
+    -- Restrict to these repositories (full name: owner/repo)
+    repositories = {},
+
+    -- Restrict to PRs requested from these teams (slug or owner/slug)
+    teams = {},
+
+    -- Restrict by review status:
+    -- pending | commented | approved | changes_requested | draft
+    status = {},
+
+    -- Restrict by CI status:
+    -- success | failure | pending | none
+    ci_status = {},
+
+    -- Restrict to PRs created within the last N days (nil disables)
+    max_age_days = nil,
+  },
 
   -- Maximum number of PRs to fetch
   max_results = 50,
@@ -122,7 +148,8 @@ Cards are color-coded by approval and CI status:
 1. Uses the GitHub Search API to find open PRs where `review-requested:YOUR_USERNAME`
 2. Enriches each PR with details, reviews, and check run data
 3. Filters out PRs you've already approved
-4. When you select a PR for review:
+4. Applies configured filters (repository, team, review status, age, CI status)
+5. When you select a PR for review:
    - Stashes uncommitted changes (configurable)
    - Fetches the remote branch
    - Checks out the PR branch locally
@@ -132,3 +159,11 @@ Cards are color-coded by approval and CI status:
 ## License
 
 MIT
+
+## Testing
+
+Run the filter test suite with:
+
+```sh
+lua tests/run.lua
+```

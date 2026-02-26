@@ -1,5 +1,6 @@
 local config = require("gh-review.config")
 local curl = require("plenary.curl")
+local filters = require("gh-review.filters")
 
 local M = {}
 
@@ -182,6 +183,8 @@ function M.fetch_review_requests()
   end
   local current_user = user.login
 
+  local configured_filters = filters.resolve(config.options)
+
   -- Search for PRs where review is requested for user or configured teams
   local search_results = {}
   local seen_prs = {}
@@ -226,76 +229,64 @@ function M.fetch_review_requests()
     if owner and repo then
       local full_name = owner .. "/" .. repo
 
-      -- Check if we should filter by repos
-      local repos_filter = config.options.repos
-      local should_include = true
-      if repos_filter and #repos_filter > 0 then
-        should_include = false
-        for _, r in ipairs(repos_filter) do
-          if r == full_name then
-            should_include = true
+      local pr_number = item.number
+
+      -- Fetch PR details
+      local pr_detail = api_get(string.format("/repos/%s/%s/pulls/%d", owner, repo, pr_number))
+
+      -- Fetch reviews
+      local reviews = api_get(string.format("/repos/%s/%s/pulls/%d/reviews", owner, repo, pr_number))
+
+      -- Check if user already approved
+      local user_approved = false
+      if reviews then
+        for i = #reviews, 1, -1 do
+          local r = reviews[i]
+          if r.user and r.user.login == current_user then
+            if r.state == "APPROVED" then
+              user_approved = true
+            end
             break
           end
         end
       end
 
-      if should_include then
-        local pr_number = item.number
-
-        -- Fetch PR details
-        local pr_detail = api_get(string.format("/repos/%s/%s/pulls/%d", owner, repo, pr_number))
-
-        -- Fetch reviews
-        local reviews = api_get(string.format("/repos/%s/%s/pulls/%d/reviews", owner, repo, pr_number))
-
-        -- Check if user already approved
-        local user_approved = false
-        if reviews then
-          for i = #reviews, 1, -1 do
-            local r = reviews[i]
-            if r.user and r.user.login == current_user then
-              if r.state == "APPROVED" then
-                user_approved = true
-              end
-              break
-            end
+      if not user_approved then
+        -- Fetch check runs for head commit
+        local check_runs_data = nil
+        if pr_detail and pr_detail.head and pr_detail.head.sha then
+          local cr = api_get(string.format("/repos/%s/%s/commits/%s/check-runs", owner, repo, pr_detail.head.sha))
+          if cr then
+            check_runs_data = cr.check_runs
           end
         end
 
-        if not user_approved then
-          -- Fetch check runs for head commit
-          local check_runs_data = nil
-          if pr_detail and pr_detail.head and pr_detail.head.sha then
-            local cr = api_get(string.format("/repos/%s/%s/commits/%s/check-runs", owner, repo, pr_detail.head.sha))
-            if cr then
-              check_runs_data = cr.check_runs
-            end
-          end
+        local pr = {
+          number = pr_number,
+          title = item.title or "Untitled",
+          html_url = item.html_url,
+          created_at = item.created_at,
+          updated_at = item.updated_at,
+          draft = pr_detail and pr_detail.draft or false,
+          author = item.user and item.user.login or "unknown",
+          repo_name = repo,
+          repo_full_name = full_name,
+          head_ref = pr_detail and pr_detail.head and pr_detail.head.ref or nil,
+          head_sha = pr_detail and pr_detail.head and pr_detail.head.sha or nil,
+          head_repo_full_name = pr_detail and pr_detail.head and pr_detail.head.repo and pr_detail.head.repo.full_name or nil,
+          base_ref = pr_detail and pr_detail.base and pr_detail.base.ref or nil,
+          additions = pr_detail and pr_detail.additions or 0,
+          deletions = pr_detail and pr_detail.deletions or 0,
+          commits = pr_detail and pr_detail.commits or 0,
+          comments = (item.comments or 0) + (pr_detail and pr_detail.review_comments or 0),
+          labels = item.labels or {},
+          requested_teams = pr_detail and pr_detail.requested_teams or {},
+          approval_status = calculate_approval_status(reviews, current_user),
+          pipeline_status = calculate_pipeline_status(check_runs_data),
+          reviews = reviews or {},
+        }
 
-          local pr = {
-            number = pr_number,
-            title = item.title or "Untitled",
-            html_url = item.html_url,
-            created_at = item.created_at,
-            updated_at = item.updated_at,
-            draft = pr_detail and pr_detail.draft or false,
-            author = item.user and item.user.login or "unknown",
-            repo_name = repo,
-            repo_full_name = full_name,
-            head_ref = pr_detail and pr_detail.head and pr_detail.head.ref or nil,
-            head_sha = pr_detail and pr_detail.head and pr_detail.head.sha or nil,
-            head_repo_full_name = pr_detail and pr_detail.head and pr_detail.head.repo and pr_detail.head.repo.full_name or nil,
-            base_ref = pr_detail and pr_detail.base and pr_detail.base.ref or nil,
-            additions = pr_detail and pr_detail.additions or 0,
-            deletions = pr_detail and pr_detail.deletions or 0,
-            commits = pr_detail and pr_detail.commits or 0,
-            comments = (item.comments or 0) + (pr_detail and pr_detail.review_comments or 0),
-            labels = item.labels or {},
-            approval_status = calculate_approval_status(reviews, current_user),
-            pipeline_status = calculate_pipeline_status(check_runs_data),
-            reviews = reviews or {},
-          }
-
+        if filters.matches(pr, configured_filters) then
           table.insert(prs, pr)
         end
       end

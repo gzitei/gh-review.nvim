@@ -14,13 +14,21 @@
 
 ---@class GhReviewConfig
 ---@field github_token? string GitHub personal access token (or set GITHUB_TOKEN env var)
----@field repos? string[] Repos to monitor (empty = all repos where review is requested)
+---@field repos? string[] Backward-compatible alias for filters.repositories
 ---@field teams? string[] Teams to monitor for review requests (e.g. {"owner/team"})
+---@field filters? GhReviewConfigFilters PR list filtering options
 ---@field max_results? number How many PRs to fetch at most
 ---@field auto_fetch? boolean Auto-fetch remote before switching branches
 ---@field auto_stash? boolean Auto-stash changes before switching branches
 ---@field view? GhReviewConfigView View configuration
 ---@field keymaps? GhReviewConfigKeymaps Keymaps inside the PR list window
+
+---@class GhReviewConfigFilters
+---@field repositories? string[] Restrict PR list to these repositories (e.g. {"owner/repo"})
+---@field teams? string[] Restrict PR list to PRs requested from these teams (e.g. {"owner/team"})
+---@field status? string[] Restrict by review status: pending|commented|approved|changes_requested|draft
+---@field ci_status? string[] Restrict by CI status: success|failure|pending|none
+---@field max_age_days? number Restrict to PRs created within the last N days
 
 local M = {}
 
@@ -29,6 +37,13 @@ M.defaults = {
   github_token = "",
   repos = {},
   teams = {},
+  filters = {
+    repositories = {},
+    teams = {},
+    status = {},
+    ci_status = {},
+    max_age_days = nil,
+  },
   max_results = 50,
   auto_fetch = true,
   auto_stash = true,
