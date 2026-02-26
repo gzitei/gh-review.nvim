@@ -8,6 +8,7 @@ package.path = table.concat({
 
 local suites = {
   dofile("tests/filters_spec.lua"),
+  dofile("tests/api_spec.lua"),
 }
 
 local passed = 0

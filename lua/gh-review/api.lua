@@ -1,4 +1,5 @@
 local config = require("gh-review.config")
+local config = require("gh-review.config")
 local curl = require("plenary.curl")
 local filters = require("gh-review.filters")
 local cache = require("gh-review.cache")
@@ -82,11 +83,128 @@ function M.get_user()
   return api_get("/user")
 end
 
+--- Get teams for the authenticated user.
+---@return table[] teams
+---@return string|nil error
+function M.get_user_teams()
+  return api_get_paginated("/user/teams")
+end
+
+local calculate_approval_status
+local calculate_pipeline_status
+
+---@param current_user string
+---@param configured_filters table
+---@param queries string[]
+---@param opts? { exclude_user_approved?: boolean, ignore_team_filter?: boolean }
+---@return table[] prs
+local function fetch_prs_from_queries(current_user, configured_filters, queries, opts)
+  opts = opts or {}
+
+  local search_results = {}
+  local seen_prs = {}
+  local max = config.options.max_results or 50
+
+  for _, query in ipairs(queries) do
+    if #search_results >= max then
+      break
+    end
+
+    local search_endpoint = string.format("/search/issues?q=%s&sort=updated&order=desc", vim.uri_encode(query))
+    local results, search_err = api_get_paginated(search_endpoint)
+
+    if results and not search_err then
+      for _, item in ipairs(results) do
+        local pr_key = string.format("%s#%d", item.repository_url or "", item.number or 0)
+        if not seen_prs[pr_key] then
+          seen_prs[pr_key] = true
+          table.insert(search_results, item)
+          if #search_results >= max then
+            break
+          end
+        end
+      end
+    end
+  end
+
+  local effective_filters = configured_filters
+  if opts.ignore_team_filter then
+    effective_filters = vim.tbl_deep_extend("force", {}, configured_filters, { teams = {} })
+  end
+
+  -- Enrich each PR with details, reviews, and check runs
+  local prs = {}
+  for _, item in ipairs(search_results) do
+    local owner, repo = item.repository_url:match("/repos/([^/]+)/([^/]+)$")
+    if owner and repo then
+      local full_name = owner .. "/" .. repo
+      local pr_number = item.number
+
+      local pr_detail = api_get(string.format("/repos/%s/%s/pulls/%d", owner, repo, pr_number))
+      local reviews = api_get(string.format("/repos/%s/%s/pulls/%d/reviews", owner, repo, pr_number))
+
+      local user_approved = false
+      if opts.exclude_user_approved and reviews then
+        for i = #reviews, 1, -1 do
+          local r = reviews[i]
+          if r.user and r.user.login == current_user then
+            if r.state == "APPROVED" then
+              user_approved = true
+            end
+            break
+          end
+        end
+      end
+
+      if not user_approved then
+        local check_runs_data = nil
+        if pr_detail and pr_detail.head and pr_detail.head.sha then
+          local cr = api_get(string.format("/repos/%s/%s/commits/%s/check-runs", owner, repo, pr_detail.head.sha))
+          if cr then
+            check_runs_data = cr.check_runs
+          end
+        end
+
+        local pr = {
+          number = pr_number,
+          title = item.title or "Untitled",
+          html_url = item.html_url,
+          created_at = item.created_at,
+          updated_at = item.updated_at,
+          draft = pr_detail and pr_detail.draft or false,
+          author = item.user and item.user.login or "unknown",
+          repo_name = repo,
+          repo_full_name = full_name,
+          head_ref = pr_detail and pr_detail.head and pr_detail.head.ref or nil,
+          head_sha = pr_detail and pr_detail.head and pr_detail.head.sha or nil,
+          head_repo_full_name = pr_detail and pr_detail.head and pr_detail.head.repo and pr_detail.head.repo.full_name or nil,
+          base_ref = pr_detail and pr_detail.base and pr_detail.base.ref or nil,
+          additions = pr_detail and pr_detail.additions or 0,
+          deletions = pr_detail and pr_detail.deletions or 0,
+          commits = pr_detail and pr_detail.commits or 0,
+          comments = (item.comments or 0) + (pr_detail and pr_detail.review_comments or 0),
+          labels = item.labels or {},
+          requested_teams = pr_detail and pr_detail.requested_teams or {},
+          approval_status = calculate_approval_status(reviews, current_user),
+          pipeline_status = calculate_pipeline_status(check_runs_data),
+          reviews = reviews or {},
+        }
+
+        if filters.matches(pr, effective_filters) then
+          table.insert(prs, pr)
+        end
+      end
+    end
+  end
+
+  return prs
+end
+
 --- Calculate approval status from a list of reviews.
 ---@param reviews table[] Array of review objects
 ---@param current_user string The current user's login
 ---@return table { status: string, approvals: number, changes_requested: number, commenters: number }
-local function calculate_approval_status(reviews, current_user)
+calculate_approval_status = function(reviews, current_user)
   local by_user = {}
 
   for _, review in ipairs(reviews or {}) do
@@ -133,7 +251,7 @@ end
 --- Calculate CI/pipeline status from check runs.
 ---@param check_runs table[] Array of check run objects
 ---@return table { status: string, total: number, completed: number, success: number, failure: number }
-local function calculate_pipeline_status(check_runs)
+calculate_pipeline_status = function(check_runs)
   if not check_runs or #check_runs == 0 then
     return { status = "none", total = 0, completed = 0, success = 0, failure = 0 }
   end
@@ -186,113 +304,67 @@ local function fetch_review_requests_live()
 
   local configured_filters = filters.resolve(config.options)
 
-  -- Search for PRs where review is requested for user or configured teams
-  local search_results = {}
-  local seen_prs = {}
-  local max = config.options.max_results or 50
+  local queries = {
+    string.format("type:pr state:open archived:false review-requested:%s", current_user),
+  }
 
-  local queries = {}
-  table.insert(queries, string.format("type:pr state:open archived:false review-requested:%s", current_user))
+  local query_seen = {
+    [queries[1]] = true,
+  }
 
-  if config.options.teams and type(config.options.teams) == "table" then
-    for _, team in ipairs(config.options.teams) do
-      table.insert(queries, string.format("type:pr state:open archived:false team-review-requested:%s", team))
+  local function add_team_query(team_ref)
+    if type(team_ref) ~= "string" or team_ref == "" then
+      return
+    end
+    local query = string.format("type:pr state:open archived:false team-review-requested:%s", team_ref)
+    if not query_seen[query] then
+      query_seen[query] = true
+      table.insert(queries, query)
     end
   end
 
-  for _, query in ipairs(queries) do
-    if #search_results >= max then
-      break
-    end
+  -- Keep support for explicit team configuration.
+  for _, team_ref in ipairs(configured_filters.teams or {}) do
+    add_team_query(team_ref)
+  end
 
-    local search_endpoint = string.format("/search/issues?q=%s&sort=updated&order=desc", vim.uri_encode(query))
-    local results, search_err = api_get_paginated(search_endpoint)
-    
-    if results and not search_err then
-      for _, item in ipairs(results) do
-        if not seen_prs[item.number] then
-          seen_prs[item.number] = true
-          table.insert(search_results, item)
-          if #search_results >= max then
-            break
-          end
-        end
+  -- Include PRs requested via team review as well.
+  local teams, teams_err = M.get_user_teams()
+  if teams and not teams_err then
+    for _, team in ipairs(teams) do
+      local org = team.organization and team.organization.login
+      local slug = team.slug
+      if org and slug and org ~= "" and slug ~= "" then
+        add_team_query(string.format("%s/%s", org, slug))
       end
     end
   end
 
-  -- Enrich each PR with details, reviews, and check runs
-  local prs = {}
+  local prs = fetch_prs_from_queries(current_user, configured_filters, queries, {
+    exclude_user_approved = true,
+  })
 
-  for _, item in ipairs(search_results) do
-    -- Extract owner/repo from the repository_url
-    local owner, repo = item.repository_url:match("/repos/([^/]+)/([^/]+)$")
-    if owner and repo then
-      local full_name = owner .. "/" .. repo
+  return prs, nil
+end
 
-      local pr_number = item.number
-
-      -- Fetch PR details
-      local pr_detail = api_get(string.format("/repos/%s/%s/pulls/%d", owner, repo, pr_number))
-
-      -- Fetch reviews
-      local reviews = api_get(string.format("/repos/%s/%s/pulls/%d/reviews", owner, repo, pr_number))
-
-      -- Check if user already approved
-      local user_approved = false
-      if reviews then
-        for i = #reviews, 1, -1 do
-          local r = reviews[i]
-          if r.user and r.user.login == current_user then
-            if r.state == "APPROVED" then
-              user_approved = true
-            end
-            break
-          end
-        end
-      end
-
-      if not user_approved then
-        -- Fetch check runs for head commit
-        local check_runs_data = nil
-        if pr_detail and pr_detail.head and pr_detail.head.sha then
-          local cr = api_get(string.format("/repos/%s/%s/commits/%s/check-runs", owner, repo, pr_detail.head.sha))
-          if cr then
-            check_runs_data = cr.check_runs
-          end
-        end
-
-        local pr = {
-          number = pr_number,
-          title = item.title or "Untitled",
-          html_url = item.html_url,
-          created_at = item.created_at,
-          updated_at = item.updated_at,
-          draft = pr_detail and pr_detail.draft or false,
-          author = item.user and item.user.login or "unknown",
-          repo_name = repo,
-          repo_full_name = full_name,
-          head_ref = pr_detail and pr_detail.head and pr_detail.head.ref or nil,
-          head_sha = pr_detail and pr_detail.head and pr_detail.head.sha or nil,
-          head_repo_full_name = pr_detail and pr_detail.head and pr_detail.head.repo and pr_detail.head.repo.full_name or nil,
-          base_ref = pr_detail and pr_detail.base and pr_detail.base.ref or nil,
-          additions = pr_detail and pr_detail.additions or 0,
-          deletions = pr_detail and pr_detail.deletions or 0,
-          commits = pr_detail and pr_detail.commits or 0,
-          comments = (item.comments or 0) + (pr_detail and pr_detail.review_comments or 0),
-          labels = item.labels or {},
-          requested_teams = pr_detail and pr_detail.requested_teams or {},
-          approval_status = calculate_approval_status(reviews, current_user),
-          pipeline_status = calculate_pipeline_status(check_runs_data),
-          reviews = reviews or {},
-        }
-
-        if filters.matches(pr, configured_filters) then
-          table.insert(prs, pr)
-        end
-      end
-    end
+--- Fetch open PRs authored by the authenticated user.
+---@return table[] prs Array of enriched PR objects
+---@return string|nil error
+local function fetch_authored_prs_live()
+  local user, user_err = M.get_user()
+  if user_err then
+    return {}, user_err
   end
+
+  local current_user = user.login
+  local configured_filters = filters.resolve(config.options)
+  local queries = {
+    string.format("type:pr state:open archived:false author:%s", current_user),
+  }
+
+  local prs = fetch_prs_from_queries(current_user, configured_filters, queries, {
+    ignore_team_filter = true,
+  })
 
   return prs, nil
 end
@@ -317,6 +389,42 @@ function M.fetch_review_requests(opts)
   end
 
   local prs, err = fetch_review_requests_live()
+  if err then
+    if stale_cached then
+      return stale_cached, nil
+    end
+    return {}, err
+  end
+
+  if ttl_seconds then
+    cache.set(key, prs)
+  else
+    cache.invalidate(key)
+  end
+
+  return prs, nil
+end
+
+--- Fetch authored PRs using cache with configurable invalidation.
+---@param opts? { force?: boolean }
+---@return table[] prs Array of enriched PR objects
+---@return string|nil error
+function M.fetch_authored_prs(opts)
+  opts = opts or {}
+
+  local key = "authored_prs"
+  local ttl_minutes = tonumber(config.options.cache_ttl_minutes) or 0
+  local ttl_seconds = ttl_minutes > 0 and (ttl_minutes * 60) or nil
+  local stale_cached = cache.get(key)
+
+  if (not opts.force) and ttl_seconds then
+    local cached = cache.get(key, ttl_seconds)
+    if cached then
+      return cached, nil
+    end
+  end
+
+  local prs, err = fetch_authored_prs_live()
   if err then
     if stale_cached then
       return stale_cached, nil

@@ -46,8 +46,7 @@ require("gh-review").setup({
   -- Backward-compatible alias for filters.repositories
   repos = {},
 
-  -- Monitor review requests for specific teams (e.g., { "my-org/backend-team" })
-  -- These teams are used in GitHub search queries (team-review-requested)
+  -- Backward-compatible alias for filters.teams
   teams = {},
 
   -- Optional PR list filters
@@ -96,8 +95,10 @@ require("gh-review").setup({
     refresh = "r",
     open_in_browser = "o",
     toggle_detail = "K",
-    next_pr = "j",
-    prev_pr = "k",
+    next_pr = "n",
+    prev_pr = "N",
+    next_view = "<Right>",   -- toggle between review queue and authored PRs
+    prev_view = "<Left>",
   },
 })
 ```
@@ -114,13 +115,14 @@ require("gh-review").setup({
 
 1. Set your GitHub token via `GITHUB_TOKEN` env var or in the `setup()` call
 2. Run `:GhReviewOpen` (or your keymap) to see all PRs awaiting your review
-3. Navigate with `j`/`k`, press `K` to see PR details
-4. Press `<CR>` on a PR to:
+3. Navigate with `n`/`N`, press `K` to see PR details
+4. Press `<Left>` or `<Right>` to switch between review requests and your authored open PRs
+5. Press `<CR>` on a PR to:
    - Auto-stash any uncommitted changes
    - Fetch and switch to the PR branch
    - Open `diffview.nvim` showing only the PR's changes (merge-base diff)
-5. Press `o` to open the PR in your browser
-6. Press `q` to close the list
+6. Press `o` to open the PR in your browser
+7. Press `q` to close the list
 
 `r` and `:GhReviewRefresh` always bypass cache and fetch fresh data.
 
@@ -150,7 +152,7 @@ Cards are color-coded by approval and CI status:
 
 ## How It Works
 
-1. Uses the GitHub Search API to find open PRs where `review-requested:YOUR_USERNAME`
+1. Uses the GitHub Search API to find open PRs where `review-requested:YOUR_USERNAME`, `team-review-requested:ORG/TEAM`, or `author:YOUR_USERNAME` (authored view)
 2. Enriches each PR with details, reviews, and check run data
 3. Filters out PRs you've already approved
 4. Applies configured filters (repository, team, review status, age, CI status)

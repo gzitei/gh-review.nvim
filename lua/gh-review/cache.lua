@@ -1,6 +1,9 @@
 local M = {}
 
-local VALID_KEYS = { review_requests = true }
+local VALID_KEYS = {
+  review_requests = true,
+  authored_prs = true,
+}
 local mem = {}
 
 local function cache_dir()

@@ -77,13 +77,17 @@ function M.resolve(options)
   local opts = options or {}
   local configured = opts.filters or {}
   local repositories = configured.repositories
+  local teams = configured.teams
   if type(repositories) ~= "table" or #repositories == 0 then
     repositories = opts.repos or {}
+  end
+  if type(teams) ~= "table" or #teams == 0 then
+    teams = opts.teams or {}
   end
 
   return {
     repositories = repositories,
-    teams = configured.teams or {},
+    teams = teams,
     status = configured.status or {},
     ci_status = configured.ci_status or {},
     max_age_days = configured.max_age_days,

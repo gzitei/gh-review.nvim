@@ -10,8 +10,13 @@ local state = {
   buf = nil,
   win = nil,
   ns = vim.api.nvim_create_namespace("gh_review"),
+  ns_selected = vim.api.nvim_create_namespace("gh_review_selected"),
   prs = {},
+  view_mode = "review", -- "review" | "authored"
   card_lines = {}, -- maps line number -> PR index (1-based)
+  card_title_lines = {}, -- maps PR index -> title line number
+  card_ranges = {}, -- maps PR index -> { start_line, end_line }
+  card_width = 0,
   loading = false,
   detail_win = nil,
   detail_buf = nil,
@@ -40,6 +45,14 @@ local function card_border_chars()
   }
 end
 
+---@return string
+local function view_mode_label()
+  if state.view_mode == "authored" then
+    return "My Open PRs"
+  end
+  return "Review Queue"
+end
+
 --- Close any open detail popup.
 local function close_detail()
   if state.detail_win and vim.api.nvim_win_is_valid(state.detail_win) then
@@ -59,6 +72,9 @@ function M.close()
   state.buf = nil
   state.prs = {}
   state.card_lines = {}
+  state.card_title_lines = {}
+  state.card_ranges = {}
+  state.card_width = 0
 end
 
 --- Get the PR index for the current cursor line.
@@ -217,13 +233,16 @@ local function render()
 
   local win_width = vim.api.nvim_win_get_width(state.win)
   local card_width = math.max(30, win_width - 2)
+  state.card_width = card_width
 
   local all_lines = {}
   local all_highlights = {} -- { line_idx, group, col_start, col_end }
   state.card_lines = {}
+  state.card_title_lines = {}
+  state.card_ranges = {}
 
   -- Title line
-  local title = "GH Review Queue"
+  local title = "GH " .. view_mode_label()
   local count_str = string.format("[%d]", #state.prs)
   local title_line = utils.pad_right(string.format(" %s %s", title, count_str), card_width)
   table.insert(all_lines, title_line)
@@ -241,6 +260,8 @@ local function render()
     keymaps.prev_pr,
     keymaps.close
   )
+  local view_hint = string.format(" view: %s/%s switch", keymaps.prev_view, keymaps.next_view)
+  hint = hint .. view_hint
   local hint_line = utils.pad_right(hint, card_width)
   table.insert(all_lines, hint_line)
   table.insert(all_highlights, { #all_lines, "GhReviewHeader", 0, #hint_line })
@@ -253,12 +274,16 @@ local function render()
     table.insert(all_lines, loading_line)
     table.insert(all_highlights, { #all_lines, "GhReviewLoading", 0, #loading_line })
   elseif #state.prs == 0 then
-    local empty_line = utils.center("No pull requests match your filters", card_width)
+    local empty_msg = state.view_mode == "authored"
+        and "No authored pull requests match your filters"
+      or "No pull requests match your filters"
+    local empty_line = utils.center(empty_msg, card_width)
     table.insert(all_lines, empty_line)
     table.insert(all_highlights, { #all_lines, "GhReviewEmpty", 0, #empty_line })
   else
     for i, pr in ipairs(state.prs) do
       local card_lines = build_card_lines(pr, card_width)
+      local card_start = #all_lines + 1
       for _, cl in ipairs(card_lines) do
         table.insert(all_lines, cl.text)
         local line_idx = #all_lines
@@ -268,6 +293,8 @@ local function render()
           table.insert(all_highlights, { line_idx, hl[1], hl[2], hl[3] })
         end
       end
+      state.card_ranges[i] = { start_line = card_start, end_line = #all_lines }
+      state.card_title_lines[i] = card_start + 1
       -- Blank line between cards
       if i < #state.prs then
         table.insert(all_lines, "")
@@ -285,6 +312,54 @@ local function render()
   end
 
   vim.api.nvim_buf_set_option(state.buf, "modifiable", false)
+end
+
+local highlight_selected_card_border
+
+local function move_to_pr_index(pr_idx)
+  local title_line = state.card_title_lines[pr_idx]
+  if not title_line then
+    return
+  end
+  pcall(vim.api.nvim_win_set_cursor, state.win, { title_line, 4 })
+  highlight_selected_card_border()
+end
+
+--- Highlight the selected card border using the warn color.
+highlight_selected_card_border = function()
+  if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then
+    return
+  end
+
+  vim.api.nvim_buf_clear_namespace(state.buf, state.ns_selected, 0, -1)
+
+  local pr_idx = get_pr_at_cursor()
+  if not pr_idx then
+    return
+  end
+
+  local card_range = state.card_ranges[pr_idx]
+  if not card_range then
+    return
+  end
+
+  local width = state.card_width
+  if width <= 0 then
+    return
+  end
+
+  local left_col = 0
+  local right_col = math.max(1, width - 1)
+  for line = card_range.start_line, card_range.end_line do
+    local line0 = line - 1
+    local is_edge = (line == card_range.start_line) or (line == card_range.end_line)
+    if is_edge then
+      pcall(vim.api.nvim_buf_add_highlight, state.buf, state.ns_selected, "GhReviewSelectedBorder", line0, 0, width)
+    else
+      pcall(vim.api.nvim_buf_add_highlight, state.buf, state.ns_selected, "GhReviewSelectedBorder", line0, left_col, left_col + 1)
+      pcall(vim.api.nvim_buf_add_highlight, state.buf, state.ns_selected, "GhReviewSelectedBorder", line0, right_col, right_col + 1)
+    end
+  end
 end
 
 --- Open event detail popup for the PR under cursor.
@@ -478,13 +553,10 @@ local function move_to_next_pr()
   if not state.win or not vim.api.nvim_win_is_valid(state.win) then
     return
   end
-  local current = vim.api.nvim_win_get_cursor(state.win)[1]
-  local last = vim.api.nvim_buf_line_count(state.buf)
-  for line = current + 1, last do
-    if state.card_lines[line] then
-      vim.api.nvim_win_set_cursor(state.win, { line, 0 })
-      return
-    end
+  local current_idx = get_pr_at_cursor() or 0
+  local next_idx = current_idx + 1
+  if next_idx <= #state.prs then
+    move_to_pr_index(next_idx)
   end
 end
 
@@ -493,13 +565,40 @@ local function move_to_prev_pr()
   if not state.win or not vim.api.nvim_win_is_valid(state.win) then
     return
   end
-  local current = vim.api.nvim_win_get_cursor(state.win)[1]
-  for line = current - 1, 1, -1 do
-    if state.card_lines[line] then
-      vim.api.nvim_win_set_cursor(state.win, { line, 0 })
-      return
+  local current_idx = get_pr_at_cursor() or 1
+  local prev_idx = current_idx - 1
+  if prev_idx >= 1 then
+    move_to_pr_index(prev_idx)
+  end
+end
+
+--- Toggle list mode between review requests and authored PRs.
+---@param step number Positive for next view, negative for previous view
+local function toggle_view(step)
+  local modes = { "review", "authored" }
+  local idx = 1
+  for i, mode in ipairs(modes) do
+    if mode == state.view_mode then
+      idx = i
+      break
     end
   end
+
+  local new_idx = ((idx - 1 + step) % #modes) + 1
+  local next_mode = modes[new_idx]
+  if next_mode ~= state.view_mode then
+    state.view_mode = next_mode
+    close_detail()
+    M.refresh(false)
+  end
+end
+
+local function toggle_next_view()
+  toggle_view(1)
+end
+
+local function toggle_prev_view()
+  toggle_view(-1)
 end
 
 --- Set up keymaps for the PR list buffer.
@@ -516,6 +615,20 @@ local function setup_keymaps()
   vim.keymap.set("n", keymaps.toggle_detail, open_detail_popup, opts)
   vim.keymap.set("n", keymaps.next_pr, move_to_next_pr, opts)
   vim.keymap.set("n", keymaps.prev_pr, move_to_prev_pr, opts)
+  vim.keymap.set("n", keymaps.next_view, toggle_next_view, opts)
+  vim.keymap.set("n", keymaps.prev_view, toggle_prev_view, opts)
+  if keymaps.next_pr ~= "n" then
+    vim.keymap.set("n", "n", move_to_next_pr, opts)
+  end
+  if keymaps.prev_pr ~= "N" then
+    vim.keymap.set("n", "N", move_to_prev_pr, opts)
+  end
+  if keymaps.next_view ~= "<Right>" and keymaps.prev_view ~= "<Right>" then
+    vim.keymap.set("n", "<Right>", toggle_next_view, opts)
+  end
+  if keymaps.prev_view ~= "<Left>" and keymaps.next_view ~= "<Left>" then
+    vim.keymap.set("n", "<Left>", toggle_prev_view, opts)
+  end
 end
 
 --- Fetch PRs and re-render.
@@ -531,7 +644,8 @@ function M.refresh(force)
   -- Run the API call in a scheduled callback
   vim.schedule(function()
     local api = require("gh-review.api")
-    local ok, prs_or_err, api_err = pcall(api.fetch_review_requests, { force = force == true })
+    local fetcher = state.view_mode == "authored" and api.fetch_authored_prs or api.fetch_review_requests
+    local ok, prs_or_err, api_err = pcall(fetcher, { force = force == true })
 
     vim.schedule(function()
       state.loading = false
@@ -549,13 +663,14 @@ function M.refresh(force)
       end
 
       render()
+      highlight_selected_card_border()
 
       -- Place cursor on the first PR card if there are any
       if #state.prs > 0 then
         -- Find the first line that maps to a PR
         for line = 1, vim.api.nvim_buf_line_count(state.buf) do
           if state.card_lines[line] then
-            pcall(vim.api.nvim_win_set_cursor, state.win, { line, 0 })
+            move_to_pr_index(state.card_lines[line])
             break
           end
         end
@@ -574,6 +689,7 @@ function M.open()
 
   -- Set up highlight groups
   colors.setup()
+  state.view_mode = "review"
 
   -- Create scratch buffer
   state.buf = vim.api.nvim_create_buf(false, true)
@@ -617,8 +733,16 @@ function M.open()
       state.buf = nil
       state.prs = {}
       state.card_lines = {}
+      state.card_title_lines = {}
+      state.card_ranges = {}
+      state.card_width = 0
       close_detail()
     end,
+  })
+
+  vim.api.nvim_create_autocmd("CursorMoved", {
+    buffer = state.buf,
+    callback = highlight_selected_card_border,
   })
 
   -- Fetch and render

@@ -43,6 +43,21 @@ local function run()
     assert_eq(resolved.repositories[1], "owner/repo-b")
   end
 
+  do
+    local resolved = filters.resolve({ teams = { "acme/backend" } })
+    assert_eq(#resolved.teams, 1, "resolve should fallback to top-level teams")
+    assert_eq(resolved.teams[1], "acme/backend")
+  end
+
+  do
+    local resolved = filters.resolve({
+      teams = { "acme/backend" },
+      filters = { teams = { "acme/frontend" } },
+    })
+    assert_eq(#resolved.teams, 1, "explicit filters.teams should win")
+    assert_eq(resolved.teams[1], "acme/frontend")
+  end
+
   local pr = {
     repo_full_name = "acme/platform",
     requested_teams = {

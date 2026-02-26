@@ -11,11 +11,13 @@
 ---@field toggle_detail string View PR details
 ---@field next_pr string Next PR
 ---@field prev_pr string Previous PR
+---@field next_view string Toggle to next list view
+---@field prev_view string Toggle to previous list view
 
 ---@class GhReviewConfig
 ---@field github_token? string GitHub personal access token (or set GITHUB_TOKEN env var)
 ---@field repos? string[] Backward-compatible alias for filters.repositories
----@field teams? string[] Teams to monitor for review requests (e.g. {"owner/team"})
+---@field teams? string[] Backward-compatible alias for filters.teams
 ---@field filters? GhReviewConfigFilters PR list filtering options
 ---@field max_results? number How many PRs to fetch at most
 ---@field auto_fetch? boolean Auto-fetch remote before switching branches
@@ -60,8 +62,10 @@ M.defaults = {
     refresh = "r",
     open_in_browser = "o",
     toggle_detail = "K",
-    next_pr = "j",
-    prev_pr = "k",
+    next_pr = "n",
+    prev_pr = "N",
+    next_view = "<Right>",
+    prev_view = "<Left>",
   },
 }
 
