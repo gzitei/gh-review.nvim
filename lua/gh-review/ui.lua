@@ -349,15 +349,67 @@ highlight_selected_card_border = function()
   end
 
   local left_col = 0
-  local right_col = math.max(1, width - 1)
+  local border = card_border_chars()
+
+  local function find_last(haystack, needle)
+    local last = nil
+    local start = 1
+    while true do
+      local idx = haystack:find(needle, start, true)
+      if not idx then
+        return last
+      end
+      last = idx
+      start = idx + 1
+    end
+  end
+
   for line = card_range.start_line, card_range.end_line do
     local line0 = line - 1
+    local line_text = vim.api.nvim_buf_get_lines(state.buf, line0, line0 + 1, false)[1] or ""
     local is_edge = (line == card_range.start_line) or (line == card_range.end_line)
     if is_edge then
-      pcall(vim.api.nvim_buf_add_highlight, state.buf, state.ns_selected, "GhReviewSelectedBorder", line0, 0, width)
+      pcall(vim.api.nvim_buf_add_highlight, state.buf, state.ns_selected, "GhReviewSelectedBorder", line0, 0, -1)
     else
-      pcall(vim.api.nvim_buf_add_highlight, state.buf, state.ns_selected, "GhReviewSelectedBorder", line0, left_col, left_col + 1)
-      pcall(vim.api.nvim_buf_add_highlight, state.buf, state.ns_selected, "GhReviewSelectedBorder", line0, right_col, right_col + 1)
+      local first = line_text:find(border.vertical, 1, true)
+      local last = find_last(line_text, border.vertical)
+      if first then
+        pcall(
+          vim.api.nvim_buf_add_highlight,
+          state.buf,
+          state.ns_selected,
+          "GhReviewSelectedBorder",
+          line0,
+          first - 1,
+          first - 1 + #border.vertical
+        )
+      end
+      if last and last ~= first then
+        pcall(
+          vim.api.nvim_buf_add_highlight,
+          state.buf,
+          state.ns_selected,
+          "GhReviewSelectedBorder",
+          line0,
+          last - 1,
+          last - 1 + #border.vertical
+        )
+      end
+    end
+
+    if line == (state.card_title_lines[pr_idx] or -1) then
+      local num_start, num_end = line_text:find("#%d+")
+      if num_start and num_end then
+        pcall(
+          vim.api.nvim_buf_add_highlight,
+          state.buf,
+          state.ns_selected,
+          "GhReviewSelectedNumber",
+          line0,
+          num_start - 1,
+          num_end
+        )
+      end
     end
   end
 end
