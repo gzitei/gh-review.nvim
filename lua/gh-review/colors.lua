@@ -20,9 +20,9 @@ function M.setup()
   set_hl(0, "GhReviewCardStats", { link = "NonText", default = true })
 
   set_hl(0, "GhReviewApproved", { link = "DiffAdd", default = true })
-  set_hl(0, "GhReviewChangesRequested", { link = "DiffDelete", default = true })
+  set_hl(0, "GhReviewChangesRequested", { link = "DiffDelete", bg='none', default = true })
   set_hl(0, "GhReviewCommented", { link = "Special", default = true })
-  set_hl(0, "GhReviewPending", { link = "WarningMsg", default = true })
+  set_hl(0, "GhReviewPending", { link = "WarningMsg", bg = 'none', default = true })
 
   set_hl(0, "GhReviewCISuccess", { link = "DiffAdd", default = true })
   set_hl(0, "GhReviewCIFailure", { link = "DiffDelete", default = true })
@@ -32,8 +32,16 @@ function M.setup()
   set_hl(0, "GhReviewAdditions", { link = "DiffAdd", default = true })
   set_hl(0, "GhReviewDeletions", { link = "DiffDelete", default = true })
   set_hl(0, "GhReviewSelected", { link = "Visual", default = true })
+  set_hl(0, "GhReviewSelectedText", { fg = "#ffffff", ctermfg = 15, bold = true, default = true })
   set_hl(0, "GhReviewSelectedBorder", { fg = "#ffffff", ctermfg = 15, bold = true, default = true })
   set_hl(0, "GhReviewSelectedNumber", { fg = "#ffffff", ctermfg = 15, bold = true, default = true })
+  set_hl(0, "GhReviewSelectedApproved", { fg = "#4fa368", bg = 'none', ctermfg = 71, bold = true, default = true })
+  set_hl(0, "GhReviewSelectedChangesRequested", { fg = "#c26161", bg = 'none', ctermfg = 131, bold = true, default = true })
+  set_hl(0, "GhReviewSelectedCISuccess", { fg = "#0b3016", bg = "#6ea37b", ctermfg = 22, ctermbg = 71, bold = true, default = true })
+  set_hl(0, "GhReviewSelectedCIFailure", { fg = "#4a0f0f", bg = "#b67f7f", ctermfg = 52, ctermbg = 131, bold = true, default = true })
+  set_hl(0, "GhReviewSelectedCIPending", { fg = "#4a3b00", bg = "#b39f67", ctermfg = 94, ctermbg = 143, bold = true, default = true })
+  set_hl(0, "GhReviewSelectedAdditions", { fg = "#0b3016", bg = "#6ea37b", ctermfg = 22, ctermbg = 71, bold = true, default = true })
+  set_hl(0, "GhReviewSelectedDeletions", { fg = "#4a0f0f", bg = "#b67f7f", ctermfg = 52, ctermbg = 131, bold = true, default = true })
   set_hl(0, "GhReviewCursorLine", { link = "CursorLine", default = true })
   set_hl(0, "GhReviewDraft", { link = "WarningMsg", default = true })
   set_hl(0, "GhReviewLabel", { link = "PmenuSel", default = true })
@@ -66,6 +74,30 @@ function M.ci_hl(status)
     none = "GhReviewCINone",
   }
   return map[status] or "GhReviewCINone"
+end
+
+---@param status string
+---@return string
+function M.selected_approval_hl(status)
+  local map = {
+    approved = "GhReviewSelectedApproved",
+    changes_requested = "GhReviewSelectedChangesRequested",
+    commented = "GhReviewCommented",
+    pending = "GhReviewSelectedCIPending",
+  }
+  return map[status] or "GhReviewCommented"
+end
+
+---@param status string
+---@return string
+function M.selected_ci_hl(status)
+  local map = {
+    success = "GhReviewSelectedCISuccess",
+    failure = "GhReviewSelectedCIFailure",
+    pending = "GhReviewSelectedCIPending",
+    none = "GhReviewSelectedText",
+  }
+  return map[status] or "GhReviewSelectedText"
 end
 
 return M

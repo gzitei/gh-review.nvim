@@ -434,6 +434,11 @@ highlight_selected_card_border = function()
     return
   end
 
+  local pr = state.prs[pr_idx]
+  if not pr then
+    return
+  end
+
   local card_range = state.card_ranges[pr_idx]
   if not card_range then
     return
@@ -444,7 +449,6 @@ highlight_selected_card_border = function()
     return
   end
 
-  local left_col = 0
   local border = card_border_chars()
 
   local function find_last(haystack, needle)
@@ -460,24 +464,81 @@ highlight_selected_card_border = function()
     end
   end
 
+  local function add_selected_highlight(line0, group, col_start, col_end)
+    if col_start < col_end then
+      pcall(vim.api.nvim_buf_add_highlight, state.buf, state.ns_selected, group, line0, col_start, col_end)
+    end
+  end
+
+  local function find_span(haystack, needle)
+    local start_idx = haystack:find(needle, 1, true)
+    if not start_idx then
+      return nil, nil
+    end
+    local start_col = start_idx - 1
+    return start_col, start_col + #needle
+  end
+
   for line = card_range.start_line, card_range.end_line do
     local line0 = line - 1
     local line_text = vim.api.nvim_buf_get_lines(state.buf, line0, line0 + 1, false)[1] or ""
     local is_edge = (line == card_range.start_line) or (line == card_range.end_line)
+    local line_offset = line - card_range.start_line
     if is_edge then
       pcall(vim.api.nvim_buf_add_highlight, state.buf, state.ns_selected, "GhReviewSelectedBorder", line0, 0, -1)
     else
       local first = line_text:find(border.vertical, 1, true)
       local last = find_last(line_text, border.vertical)
       if first then
+        local first_col = first - 1
+        local content_start = first_col + #border.vertical
+        local content_end = #line_text
+        if last then
+          content_end = last - 1
+        end
+
+        if content_end > content_start then
+          add_selected_highlight(line0, "GhReviewSelectedText", content_start, content_end)
+
+          if line_offset == 3 then
+            local approval_str = utils.approval_badge(pr.approval_status)
+            local ci_str = utils.ci_badge(pr.pipeline_status)
+            local approval_status = pr.approval_status and pr.approval_status.status or "pending"
+            local ci_status = pr.pipeline_status and pr.pipeline_status.status or "none"
+
+            local approval_start, approval_end = find_span(line_text, approval_str)
+            if approval_start and approval_end then
+              add_selected_highlight(line0, colors.selected_approval_hl(approval_status), approval_start, approval_end)
+            end
+
+            local ci_start, ci_end = find_span(line_text, ci_str)
+            if ci_start and ci_end then
+              add_selected_highlight(line0, colors.selected_ci_hl(ci_status), ci_start, ci_end)
+            end
+          elseif line_offset == 4 then
+            local additions_str = string.format("+%d", pr.additions or 0)
+            local deletions_str = string.format("-%d", pr.deletions or 0)
+
+            local add_start, add_end = find_span(line_text, additions_str)
+            if add_start and add_end then
+              add_selected_highlight(line0, "GhReviewSelectedAdditions", add_start, add_end)
+            end
+
+            local del_start, del_end = find_span(line_text, deletions_str)
+            if del_start and del_end then
+              add_selected_highlight(line0, "GhReviewSelectedDeletions", del_start, del_end)
+            end
+          end
+        end
+
         pcall(
           vim.api.nvim_buf_add_highlight,
           state.buf,
           state.ns_selected,
           "GhReviewSelectedBorder",
           line0,
-          first - 1,
-          first - 1 + #border.vertical
+          first_col,
+          first_col + #border.vertical
         )
       end
       if last and last ~= first then
@@ -575,9 +636,9 @@ local function open_detail_popup()
       if not seen[login] then
         seen[login] = true
         local state_icon = ({
-          APPROVED = "",
-          CHANGES_REQUESTED = "",
-          COMMENTED = "",
+          APPROVED = " ",
+          CHANGES_REQUESTED = " ",
+          COMMENTED = " ",
           DISMISSED = "",
         })[review.state] or "?"
         local review_state = safe((review.state or "unknown"):lower())
