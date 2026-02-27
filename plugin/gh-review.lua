@@ -23,3 +23,8 @@ end, { desc = "Refresh the PR review list" })
 vim.api.nvim_create_user_command("GhReviewClose", function()
   require("gh-review.ui").close()
 end, { desc = "Close the PR review list" })
+
+vim.api.nvim_create_user_command("GhReviewDebug", function()
+  ensure_config()
+  require("gh-review.ui").debug_queries()
+end, { desc = "Debug and show query results for review/authored views" })

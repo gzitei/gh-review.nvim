@@ -23,8 +23,12 @@
 ---@field auto_fetch? boolean Auto-fetch remote before switching branches
 ---@field auto_stash? boolean Auto-stash changes before switching branches
 ---@field cache_ttl_minutes? number Cache validity in minutes (0 disables caching)
+---@field debug? GhReviewConfigDebug Debug options
 ---@field view? GhReviewConfigView View configuration
 ---@field keymaps? GhReviewConfigKeymaps Keymaps inside the PR list window
+
+---@class GhReviewConfigDebug
+---@field show_queries? boolean Show query diagnostics via vim.notify
 
 ---@class GhReviewConfigFilters
 ---@field repositories? string[] Restrict PR list to these repositories (e.g. {"owner/repo"})
@@ -51,6 +55,9 @@ M.defaults = {
   auto_fetch = true,
   auto_stash = true,
   cache_ttl_minutes = 5,
+  debug = {
+    show_queries = false,
+  },
   view = {
     width = 0.7,
     height = 0.8,

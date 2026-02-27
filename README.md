@@ -7,7 +7,9 @@ A Neovim plugin that displays GitHub pull requests awaiting your review as visua
 - Neovim >= 0.9
 - [plenary.nvim](https://github.com/nvim-lua/plenary.nvim) (for HTTP requests)
 - [diffview.nvim](https://github.com/sindrets/diffview.nvim) (for the diff review UI)
-- A GitHub Personal Access Token with `repo` scope
+- A GitHub token with repository access and org/team read access
+  - Classic PAT: `repo` + `read:org`
+  - Fine-grained PAT: repository read + organization members/teams read
 - `git` CLI available on PATH
 
 ## Installation
@@ -17,7 +19,7 @@ A Neovim plugin that displays GitHub pull requests awaiting your review as visua
 ```lua
 {
   "gzitei/gh-review.nvim",
-  cmd = { "GhReviewOpen", "GhReviewRefresh", "GhReviewClose" },
+  cmd = { "GhReviewOpen", "GhReviewRefresh", "GhReviewClose", "GhReviewDebug" },
   dependencies = {
     "nvim-lua/plenary.nvim",
     "sindrets/diffview.nvim",
@@ -31,7 +33,7 @@ A Neovim plugin that displays GitHub pull requests awaiting your review as visua
 }
 ```
 
-`GhReviewOpen`, `GhReviewRefresh`, and `GhReviewClose` are defined automatically when the plugin loads.
+`GhReviewOpen`, `GhReviewRefresh`, `GhReviewClose`, and `GhReviewDebug` are defined automatically when the plugin loads.
 Calling `setup()` is still recommended so you can configure token, filters, and keymaps.
 
 ## Configuration
@@ -81,6 +83,12 @@ require("gh-review").setup({
   -- Cache PR list for this many minutes (0 disables cache)
   cache_ttl_minutes = 5,
 
+  -- Debug options
+  debug = {
+    -- Show query/result diagnostics in :messages
+    show_queries = false,
+  },
+
   -- Floating window appearance
   view = {
     width = 0.7,    -- fraction of editor width
@@ -110,6 +118,7 @@ require("gh-review").setup({
 | `:GhReviewOpen` | Open/toggle the PR review list |
 | `:GhReviewRefresh` | Refresh the PR list (bypasses cache) |
 | `:GhReviewClose` | Close the PR review list |
+| `:GhReviewDebug` | Force fetch and print query/result diagnostics |
 
 ## Usage
 
@@ -125,6 +134,8 @@ require("gh-review").setup({
 7. Press `q` to close the list
 
 `r` and `:GhReviewRefresh` always bypass cache and fetch fresh data.
+
+When `debug.show_queries = true`, each refresh also prints query diagnostics in `:messages`.
 
 ## PR Card Layout
 
@@ -162,6 +173,19 @@ Cards are color-coded by approval and CI status:
    - Checks out the PR branch locally
    - Computes the merge-base with the target branch
    - Opens `diffview.nvim` with a `merge-base...HEAD` diff
+
+## Troubleshooting
+
+### Team review requests do not show up
+
+If PRs requested to your team are missing, check:
+
+1. Your token scopes include org/team read access (`read:org` for classic PAT)
+2. `:GhReviewRefresh` to bypass cache
+3. You are in review queue view (`<Left>` / `<Right>`)
+4. Active filters are not excluding the PR
+
+Run `:GhReviewDebug` to see the exact queries and result counts used by the plugin.
 
 ## License
 

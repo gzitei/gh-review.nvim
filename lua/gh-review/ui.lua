@@ -22,6 +22,102 @@ local state = {
   detail_buf = nil,
 }
 
+---@return boolean
+local function show_query_debug()
+  return config.options
+    and config.options.debug
+    and config.options.debug.show_queries == true
+end
+
+---@param diagnostics table|nil
+---@param title string
+---@return string[]
+local function diagnostics_lines(diagnostics, title)
+  if type(diagnostics) ~= "table" then
+    return {}
+  end
+
+  local lines = {
+    string.format("gh-review debug [%s]", title),
+  }
+
+  if diagnostics.from_cache then
+    table.insert(lines, "source: cache")
+  else
+    table.insert(lines, "source: live")
+  end
+
+  local counts = diagnostics.counts or {}
+  table.insert(
+    lines,
+    string.format(
+      "counts: candidates=%d skipped_approved=%d returned=%d",
+      counts.search_candidates or 0,
+      counts.skipped_user_approved or 0,
+      counts.returned or 0
+    )
+  )
+
+  local query_results = diagnostics.query_results or {}
+  if #query_results == 0 then
+    table.insert(lines, "queries: none")
+  else
+    table.insert(lines, "queries:")
+    for _, result in ipairs(query_results) do
+      local status = result.status or "ok"
+      local suffix = ""
+      if result.error and result.error ~= "" then
+        suffix = string.format(" err=%s", result.error)
+      end
+      table.insert(
+        lines,
+        string.format(
+          "- [%s] returned=%d unique=%d | %s%s",
+          status,
+          result.returned or 0,
+          result.unique_added or 0,
+          result.query or "",
+          suffix
+        )
+      )
+    end
+  end
+
+  local team_discovery = diagnostics.team_discovery
+  if type(team_discovery) == "table" then
+    table.insert(
+      lines,
+      string.format(
+        "teams: configured=%d discovered=%d",
+        team_discovery.configured_count or 0,
+        team_discovery.discovered_count or 0
+      )
+    )
+    if team_discovery.error and team_discovery.error ~= "" then
+      table.insert(lines, "teams_error: " .. team_discovery.error)
+    end
+  end
+
+  return lines
+end
+
+---@param diagnostics table|nil
+---@param title string
+---@param force_debug boolean
+local function notify_diagnostics(diagnostics, title, force_debug)
+  if type(diagnostics) ~= "table" then
+    return
+  end
+
+  for _, warning in ipairs(diagnostics.warnings or {}) do
+    vim.notify("gh-review: " .. warning, vim.log.levels.WARN)
+  end
+
+  if force_debug or show_query_debug() then
+    vim.notify(table.concat(diagnostics_lines(diagnostics, title), "\n"), vim.log.levels.INFO)
+  end
+end
+
 local function card_border_chars()
   local border = config.options.view and config.options.view.border or "rounded"
   if border == "rounded" then
@@ -697,7 +793,7 @@ function M.refresh(force)
   vim.schedule(function()
     local api = require("gh-review.api")
     local fetcher = state.view_mode == "authored" and api.fetch_authored_prs or api.fetch_review_requests
-    local ok, prs_or_err, api_err = pcall(fetcher, { force = force == true })
+    local ok, prs_or_err, api_err, diagnostics = pcall(fetcher, { force = force == true })
 
     vim.schedule(function()
       state.loading = false
@@ -714,6 +810,8 @@ function M.refresh(force)
         state.prs = prs_or_err or {}
       end
 
+      notify_diagnostics(diagnostics, state.view_mode, false)
+
       render()
       highlight_selected_card_border()
 
@@ -729,6 +827,27 @@ function M.refresh(force)
       end
     end)
   end)
+end
+
+--- Fetch and print query diagnostics for both views.
+function M.debug_queries()
+  local api = require("gh-review.api")
+
+  local ok_review, review_result_or_error, review_err, review_diag = pcall(api.fetch_review_requests, { force = true })
+  if not ok_review then
+    vim.notify("gh-review: " .. tostring(review_result_or_error), vim.log.levels.ERROR)
+  elseif review_err then
+    vim.notify("gh-review: " .. review_err, vim.log.levels.ERROR)
+  end
+  notify_diagnostics(review_diag, "review", true)
+
+  local ok_authored, authored_result_or_error, authored_err, authored_diag = pcall(api.fetch_authored_prs, { force = true })
+  if not ok_authored then
+    vim.notify("gh-review: " .. tostring(authored_result_or_error), vim.log.levels.ERROR)
+  elseif authored_err then
+    vim.notify("gh-review: " .. authored_err, vim.log.levels.ERROR)
+  end
+  notify_diagnostics(authored_diag, "authored", true)
 end
 
 --- Open the PR review list window.

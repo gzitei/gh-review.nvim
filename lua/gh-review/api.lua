@@ -1,10 +1,14 @@
 local config = require("gh-review.config")
-local config = require("gh-review.config")
 local curl = require("plenary.curl")
 local filters = require("gh-review.filters")
 local cache = require("gh-review.cache")
 
 local M = {}
+
+local last_diagnostics = {
+  review = nil,
+  authored = nil,
+}
 
 local API_BASE = "https://api.github.com"
 
@@ -93,37 +97,135 @@ end
 local calculate_approval_status
 local calculate_pipeline_status
 
+---@param diagnostics table|nil
+---@param message string
+local function add_warning(diagnostics, message)
+  if not diagnostics or type(message) ~= "string" or message == "" then
+    return
+  end
+
+  diagnostics.warnings = diagnostics.warnings or {}
+  for _, existing in ipairs(diagnostics.warnings) do
+    if existing == message then
+      return
+    end
+  end
+
+  table.insert(diagnostics.warnings, message)
+end
+
+---@param values table|nil
+---@return table
+local function copy_array(values)
+  local out = {}
+  if type(values) ~= "table" then
+    return out
+  end
+
+  for _, value in ipairs(values) do
+    table.insert(out, value)
+  end
+
+  return out
+end
+
+---@param team_ref any
+---@return string|nil normalized
+---@return string|nil warning
+local function normalize_team_query_ref(team_ref)
+  if type(team_ref) ~= "string" then
+    return nil, ""
+  end
+
+  local cleaned = team_ref:gsub("^%s+", ""):gsub("%s+$", "")
+  if cleaned == "" then
+    return nil, ""
+  end
+
+  local parts = {}
+  for part in cleaned:gmatch("[^/]+") do
+    if part ~= "" then
+      table.insert(parts, part)
+    end
+  end
+
+  if #parts == 1 then
+    return parts[1], nil
+  end
+
+  if #parts == 2 then
+    return string.format("%s/%s", parts[1], parts[2]), nil
+  end
+
+  if #parts == 3 and parts[1] == parts[2] then
+    local normalized = string.format("%s/%s", parts[2], parts[3])
+    local warning = string.format(
+      "Normalized team filter '%s' to '%s'.",
+      cleaned,
+      normalized
+    )
+    return normalized, warning
+  end
+
+  local warning = string.format(
+    "Ignoring invalid team filter '%s'. Expected 'team-slug' or 'org/team-slug'.",
+    cleaned
+  )
+  return nil, warning
+end
+
 ---@param current_user string
 ---@param configured_filters table
 ---@param queries string[]
 ---@param opts? { exclude_user_approved?: boolean, ignore_team_filter?: boolean }
+---@param diagnostics? table
 ---@return table[] prs
-local function fetch_prs_from_queries(current_user, configured_filters, queries, opts)
+local function fetch_prs_from_queries(current_user, configured_filters, queries, opts, diagnostics)
   opts = opts or {}
 
   local search_results = {}
   local seen_prs = {}
   local max = config.options.max_results or 50
+  local skipped_user_approved = 0
 
   for _, query in ipairs(queries) do
     if #search_results >= max then
       break
     end
 
+    local query_result = {
+      query = query,
+      returned = 0,
+      unique_added = 0,
+      status = "ok",
+      error = nil,
+    }
+
     local search_endpoint = string.format("/search/issues?q=%s&sort=updated&order=desc", vim.uri_encode(query))
     local results, search_err = api_get_paginated(search_endpoint)
 
     if results and not search_err then
+      query_result.returned = #results
       for _, item in ipairs(results) do
         local pr_key = string.format("%s#%d", item.repository_url or "", item.number or 0)
         if not seen_prs[pr_key] then
           seen_prs[pr_key] = true
+          query_result.unique_added = query_result.unique_added + 1
           table.insert(search_results, item)
           if #search_results >= max then
             break
           end
         end
       end
+    else
+      query_result.status = "error"
+      query_result.error = search_err or "unknown search error"
+      add_warning(diagnostics, string.format("Failed query '%s': %s", query, query_result.error))
+    end
+
+    if diagnostics then
+      diagnostics.query_results = diagnostics.query_results or {}
+      table.insert(diagnostics.query_results, query_result)
     end
   end
 
@@ -193,8 +295,17 @@ local function fetch_prs_from_queries(current_user, configured_filters, queries,
         if filters.matches(pr, effective_filters) then
           table.insert(prs, pr)
         end
+      else
+        skipped_user_approved = skipped_user_approved + 1
       end
     end
+  end
+
+  if diagnostics then
+    diagnostics.counts = diagnostics.counts or {}
+    diagnostics.counts.search_candidates = #search_results
+    diagnostics.counts.skipped_user_approved = skipped_user_approved
+    diagnostics.counts.returned = #prs
   end
 
   return prs
@@ -295,65 +406,116 @@ end
 ---@return table[] prs Array of enriched PR objects
 ---@return string|nil error
 local function fetch_review_requests_live()
+  local diagnostics = {
+    mode = "review",
+    queries = {},
+    query_results = {},
+    warnings = {},
+    counts = {},
+  }
+
   -- Get current user
   local user, user_err = M.get_user()
   if user_err then
-    return {}, user_err
+    return {}, user_err, diagnostics
   end
   local current_user = user.login
 
   local configured_filters = filters.resolve(config.options)
 
-  local queries = {
-    string.format("type:pr state:open archived:false review-requested:%s", current_user),
+  local queries = {}
+
+  diagnostics.queries = {}
+  diagnostics.team_discovery = {
+    configured_count = #(configured_filters.teams or {}),
+    discovered_count = 0,
+    error = nil,
+    skipped = false,
   }
 
-  local query_seen = {
-    [queries[1]] = true,
-  }
+  local query_seen = {}
 
   local function add_team_query(team_ref)
     if type(team_ref) ~= "string" or team_ref == "" then
       return
     end
+
     local query = string.format("type:pr state:open archived:false team-review-requested:%s", team_ref)
     if not query_seen[query] then
       query_seen[query] = true
       table.insert(queries, query)
+      table.insert(diagnostics.queries, query)
     end
   end
 
-  -- Keep support for explicit team configuration.
-  for _, team_ref in ipairs(configured_filters.teams or {}) do
-    add_team_query(team_ref)
-  end
-
-  -- Include PRs requested via team review as well.
-  local teams, teams_err = M.get_user_teams()
-  if teams and not teams_err then
-    for _, team in ipairs(teams) do
-      local org = team.organization and team.organization.login
-      local slug = team.slug
-      if org and slug and org ~= "" and slug ~= "" then
-        add_team_query(string.format("%s/%s", org, slug))
+  local configured_team_filters = configured_filters.teams or {}
+  local team_filters_for_matching = copy_array(configured_team_filters)
+  if #configured_team_filters > 0 then
+    -- If teams are explicitly configured, query only those teams.
+    diagnostics.team_discovery.skipped = true
+    team_filters_for_matching = {}
+    for _, team_ref in ipairs(configured_team_filters) do
+      local normalized_team_ref, warning = normalize_team_query_ref(team_ref)
+      if warning then
+        add_warning(diagnostics, warning)
+      end
+      if normalized_team_ref then
+        add_team_query(normalized_team_ref)
+        table.insert(team_filters_for_matching, normalized_team_ref)
       end
     end
+  else
+    local review_query = string.format("type:pr state:open archived:false review-requested:%s", current_user)
+    query_seen[review_query] = true
+    table.insert(queries, review_query)
+    table.insert(diagnostics.queries, review_query)
+
+    -- Include PRs requested via team review based on the authenticated user's teams.
+    local teams, teams_err = M.get_user_teams()
+    if teams and not teams_err then
+      diagnostics.team_discovery.discovered_count = #teams
+      for _, team in ipairs(teams) do
+        local org = team.organization and team.organization.login
+        local slug = team.slug
+        if org and slug and org ~= "" and slug ~= "" then
+          add_team_query(string.format("%s/%s", org, slug))
+        end
+      end
+    elseif teams_err then
+      diagnostics.team_discovery.error = teams_err
+      add_warning(
+        diagnostics,
+        "Could not load your GitHub teams (/user/teams). Team review requests may be missing. Check token org/team scope (e.g. read:org)."
+      )
+    end
   end
 
-  local prs = fetch_prs_from_queries(current_user, configured_filters, queries, {
-    exclude_user_approved = true,
+  local effective_filters = vim.tbl_deep_extend("force", {}, configured_filters, {
+    teams = #configured_team_filters > 0 and {} or team_filters_for_matching,
   })
 
-  return prs, nil
+  local prs = fetch_prs_from_queries(current_user, effective_filters, queries, {
+    exclude_user_approved = true,
+  }, diagnostics)
+
+  return prs, nil, diagnostics
 end
 
 --- Fetch open PRs authored by the authenticated user.
 ---@return table[] prs Array of enriched PR objects
 ---@return string|nil error
 local function fetch_authored_prs_live()
+  local diagnostics = {
+    mode = "authored",
+    queries = {},
+    query_results = {},
+    warnings = {},
+    counts = {},
+  }
+
   local user, user_err = M.get_user()
   if user_err then
-    return {}, user_err
+    return {}, user_err, diagnostics
   end
 
   local current_user = user.login
@@ -361,18 +523,20 @@ local function fetch_authored_prs_live()
   local queries = {
     string.format("type:pr state:open archived:false author:%s", current_user),
   }
+  diagnostics.queries = copy_array(queries)
 
   local prs = fetch_prs_from_queries(current_user, configured_filters, queries, {
     ignore_team_filter = true,
-  })
+  }, diagnostics)
 
-  return prs, nil
+  return prs, nil, diagnostics
 end
 
 --- Fetch review requests using cache with configurable invalidation.
 ---@param opts? { force?: boolean }
 ---@return table[] prs Array of enriched PR objects
 ---@return string|nil error
+---@return table|nil diagnostics
 function M.fetch_review_requests(opts)
   opts = opts or {}
 
@@ -384,16 +548,36 @@ function M.fetch_review_requests(opts)
   if (not opts.force) and ttl_seconds then
     local cached = cache.get(key, ttl_seconds)
     if cached then
-      return cached, nil
+      local diagnostics = {
+        mode = "review",
+        cache_hit = true,
+        from_cache = true,
+        queries = {},
+        query_results = {},
+        warnings = {},
+        counts = { returned = #cached },
+      }
+      last_diagnostics.review = diagnostics
+      return cached, nil, diagnostics
     end
   end
 
-  local prs, err = fetch_review_requests_live()
+  local prs, err, diagnostics = fetch_review_requests_live()
   if err then
     if stale_cached then
-      return stale_cached, nil
+      local fallback_diagnostics = diagnostics or {}
+      fallback_diagnostics.mode = "review"
+      fallback_diagnostics.from_cache = true
+      add_warning(fallback_diagnostics, string.format("Live refresh failed, showing cached data: %s", err))
+      fallback_diagnostics.counts = fallback_diagnostics.counts or {}
+      fallback_diagnostics.counts.returned = #stale_cached
+      last_diagnostics.review = fallback_diagnostics
+      return stale_cached, nil, fallback_diagnostics
     end
-    return {}, err
+    diagnostics = diagnostics or { mode = "review", warnings = {}, queries = {}, query_results = {}, counts = {} }
+    add_warning(diagnostics, err)
+    last_diagnostics.review = diagnostics
+    return {}, err, diagnostics
   end
 
   if ttl_seconds then
@@ -402,13 +586,15 @@ function M.fetch_review_requests(opts)
     cache.invalidate(key)
   end
 
-  return prs, nil
+  last_diagnostics.review = diagnostics
+  return prs, nil, diagnostics
 end
 
 --- Fetch authored PRs using cache with configurable invalidation.
 ---@param opts? { force?: boolean }
 ---@return table[] prs Array of enriched PR objects
 ---@return string|nil error
+---@return table|nil diagnostics
 function M.fetch_authored_prs(opts)
   opts = opts or {}
 
@@ -420,16 +606,36 @@ function M.fetch_authored_prs(opts)
   if (not opts.force) and ttl_seconds then
     local cached = cache.get(key, ttl_seconds)
     if cached then
-      return cached, nil
+      local diagnostics = {
+        mode = "authored",
+        cache_hit = true,
+        from_cache = true,
+        queries = {},
+        query_results = {},
+        warnings = {},
+        counts = { returned = #cached },
+      }
+      last_diagnostics.authored = diagnostics
+      return cached, nil, diagnostics
     end
   end
 
-  local prs, err = fetch_authored_prs_live()
+  local prs, err, diagnostics = fetch_authored_prs_live()
   if err then
     if stale_cached then
-      return stale_cached, nil
+      local fallback_diagnostics = diagnostics or {}
+      fallback_diagnostics.mode = "authored"
+      fallback_diagnostics.from_cache = true
+      add_warning(fallback_diagnostics, string.format("Live refresh failed, showing cached data: %s", err))
+      fallback_diagnostics.counts = fallback_diagnostics.counts or {}
+      fallback_diagnostics.counts.returned = #stale_cached
+      last_diagnostics.authored = fallback_diagnostics
+      return stale_cached, nil, fallback_diagnostics
     end
-    return {}, err
+    diagnostics = diagnostics or { mode = "authored", warnings = {}, queries = {}, query_results = {}, counts = {} }
+    add_warning(diagnostics, err)
+    last_diagnostics.authored = diagnostics
+    return {}, err, diagnostics
   end
 
   if ttl_seconds then
@@ -438,7 +644,18 @@ function M.fetch_authored_prs(opts)
     cache.invalidate(key)
   end
 
-  return prs, nil
+  last_diagnostics.authored = diagnostics
+  return prs, nil, diagnostics
+end
+
+---@param mode? string
+---@return table|nil
+function M.get_last_diagnostics(mode)
+  if mode == "review" or mode == "authored" then
+    return last_diagnostics[mode]
+  end
+
+  return last_diagnostics
 end
 
 return M
